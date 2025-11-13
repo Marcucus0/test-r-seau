@@ -403,11 +403,14 @@ class P2PClient:
         self.peer_port = peer_port
         self.base_url = f"https://{peer_address}:{peer_port}"
         
-        # Configuration SSL pour mTLS
-        self.ssl_context = ssl.create_default_context()
-        self.ssl_context.load_verify_locations(CA_CERT)
-        self.ssl_context.load_cert_chain(CLIENT_CERT, CLIENT_KEY)
-        self.ssl_context.check_hostname = False  # Pour les IP locales
+        # Configuration SSL pour mTLS avec httpx
+        # httpx utilise verify pour le certificat CA et cert pour le certificat client
+        # Vérifie que les fichiers existent
+        if not CA_CERT.exists() or not CLIENT_CERT.exists() or not CLIENT_KEY.exists():
+            raise FileNotFoundError("Certificats manquants pour le client P2P")
+        
+        self.verify = str(CA_CERT)  # Certificat CA pour vérifier le serveur
+        self.cert = (str(CLIENT_CERT), str(CLIENT_KEY))  # Certificat client pour mTLS
     
     async def upload_chunk_to_peer(self, chunk_hash: str, encrypted_data: bytes) -> bool:
         """
@@ -424,7 +427,7 @@ class P2PClient:
             # Encode en base64
             data_b64 = base64.b64encode(encrypted_data).decode('utf-8')
             
-            async with httpx.AsyncClient(verify=self.ssl_context) as client:
+            async with httpx.AsyncClient(verify=self.verify, cert=self.cert) as client:
                 response = await client.post(
                     f"{self.base_url}/upload_chunk",
                     json={"hash": chunk_hash, "data": data_b64},
@@ -447,7 +450,7 @@ class P2PClient:
             Données chiffrées ou None si échec
         """
         try:
-            async with httpx.AsyncClient(verify=self.ssl_context) as client:
+            async with httpx.AsyncClient(verify=self.verify, cert=self.cert) as client:
                 response = await client.get(
                     f"{self.base_url}/download_chunk/{chunk_hash}",
                     timeout=30.0
@@ -476,7 +479,7 @@ class P2PClient:
             Liste des hashes de chunks
         """
         try:
-            async with httpx.AsyncClient(verify=self.ssl_context) as client:
+            async with httpx.AsyncClient(verify=self.verify, cert=self.cert) as client:
                 response = await client.get(
                     f"{self.base_url}/list_chunks",
                     timeout=10.0
@@ -649,9 +652,17 @@ async def main():
     ssl_context.verify_mode = ssl.CERT_REQUIRED  # Exige un certificat client valide
     
     # Configuration hypercorn pour mTLS
+    # Hypercorn accepte ssl_context directement dans les versions récentes
     hypercorn_config = HypercornConfig()
     hypercorn_config.bind = [f"0.0.0.0:{port}"]
-    hypercorn_config.ssl_context = ssl_context
+    try:
+        # Essaie d'utiliser ssl_context (supporté dans hypercorn >= 0.14.0)
+        hypercorn_config.ssl_context = ssl_context
+    except AttributeError:
+        # Fallback: utilise keyfile et certfile (mais mTLS sera moins strict)
+        hypercorn_config.keyfile = str(SERVER_KEY)
+        hypercorn_config.certfile = str(SERVER_CERT)
+        print("⚠️  Attention: mTLS peut ne pas être entièrement fonctionnel avec cette version de hypercorn")
     hypercorn_config.loglevel = "WARNING"
     
     # Lance le serveur hypercorn dans une tâche asyncio
