@@ -158,7 +158,10 @@ class P2PFileTransfer:
         
         if not os.path.exists(filename):
             print(f"  ✗ Fichier non trouvé: {filename}")
-            client_socket.send(json.dumps({'error': 'not_found'}).encode())
+            try:
+                client_socket.send(json.dumps({'error': 'not_found'}).encode() + b'\n[END_METADATA]\n')
+            except:
+                pass
             return
         
         try:
@@ -171,7 +174,9 @@ class P2PFileTransfer:
                 'file_size': file_size,
                 'hash': file_hash
             }
-            client_socket.send(json.dumps(metadata).encode() + b'\n[END_METADATA]\n')
+            metadata_json = json.dumps(metadata).encode() + b'\n[END_METADATA]\n'
+            client_socket.sendall(metadata_json)
+            time.sleep(0.1)
             
             print(f"  Download: {filename} ({file_size / 1024 / 1024:.2f} MB)")
             
@@ -333,7 +338,7 @@ class P2PNode:
             
             # Connecter et télécharger
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(10)
+            client_socket.settimeout(60)
             client_socket.connect((host, port))
             print(f"→ Connecté à {host}:{port}")
             
@@ -342,15 +347,21 @@ class P2PNode:
                 'action': 'download',
                 'filename': filename
             }
-            client_socket.send(json.dumps(commande).encode())
+            client_socket.sendall(json.dumps(commande).encode())
+            time.sleep(0.2)
             
             # Recevoir les métadonnées
             metadata_json = b''
             while b'\n[END_METADATA]\n' not in metadata_json:
-                chunk = client_socket.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                metadata_json += chunk
+                try:
+                    chunk = client_socket.recv(BUFFER_SIZE)
+                    if not chunk:
+                        print("✗ Connexion fermée avant métadonnées")
+                        return
+                    metadata_json += chunk
+                except socket.timeout:
+                    print("✗ Timeout réception métadonnées")
+                    return
             
             metadata_str = metadata_json.decode().split('\n[END_METADATA]\n')[0]
             metadata = json.loads(metadata_str)
@@ -367,18 +378,26 @@ class P2PNode:
             sha256 = hashlib.sha256()
             with open(nom_dechiffre, 'wb') as f:
                 while received_size < file_size:
-                    to_read = min(CHUNK_SIZE, file_size - received_size)
-                    chunk_encrypted = client_socket.recv(to_read)
-                    if not chunk_encrypted:
+                    try:
+                        to_read = min(CHUNK_SIZE, file_size - received_size)
+                        chunk_encrypted = client_socket.recv(to_read)
+                        if not chunk_encrypted:
+                            print("✗ Connexion fermée avant fin du fichier")
+                            break
+                        
+                        chunk_decrypted = cipher.decrypt(chunk_encrypted)
+                        f.write(chunk_decrypted)
+                        sha256.update(chunk_encrypted)
+                        received_size += len(chunk_encrypted)
+                        
+                        progress = (received_size / file_size) * 100
+                        print(f"  Réception: {progress:.1f}%", end='\r')
+                    except socket.timeout:
+                        print("\n✗ Timeout réception fichier")
                         break
-                    
-                    chunk_decrypted = cipher.decrypt(chunk_encrypted)
-                    f.write(chunk_decrypted)
-                    sha256.update(chunk_encrypted)
-                    received_size += len(chunk_encrypted)
-                    
-                    progress = (received_size / file_size) * 100
-                    print(f"  Réception: {progress:.1f}%", end='\r')
+                    except Exception as e:
+                        print(f"\n✗ Erreur déchiffrement: {e}")
+                        break
             
             received_hash = sha256.hexdigest()
             if received_hash == original_hash:
@@ -456,8 +475,6 @@ if __name__ == "__main__":
             password = sys.argv[5]
             
             node = P2PNode()
-            node.start()
-            time.sleep(0.5)
             node.envoyer_fichier(filepath, host, port, password)
         
         elif mode == "download" and len(sys.argv) > 5:
@@ -467,8 +484,6 @@ if __name__ == "__main__":
             password = sys.argv[5]
             
             node = P2PNode()
-            node.start()
-            time.sleep(0.5)
             node.telecharger_fichier(filename, host, port, password)
         
         elif mode == "list" and len(sys.argv) > 3:
