@@ -1,0 +1,27 @@
+# Certificats SSL (ne pas commiter les clés privées)
+
+# Chunks et fichiers reçus
+chunks/
+received/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
