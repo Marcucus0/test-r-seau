@@ -11,7 +11,6 @@ Fonctionnalités :
 - Client P2P pour envoyer/télécharger des fichiers complets
 """
 
-import os
 import json
 import hashlib
 from pathlib import Path
@@ -22,9 +21,8 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 import base64
 import secrets
-import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import httpx
 import ssl
@@ -655,14 +653,20 @@ async def main():
     # Hypercorn accepte ssl_context directement dans les versions récentes
     hypercorn_config = HypercornConfig()
     hypercorn_config.bind = [f"0.0.0.0:{port}"]
-    try:
-        # Essaie d'utiliser ssl_context (supporté dans hypercorn >= 0.14.0)
+    
+    # Vérifie si hypercorn supporte ssl_context
+    if hasattr(hypercorn_config, 'ssl_context'):
+        # Version récente de hypercorn qui supporte ssl_context
         hypercorn_config.ssl_context = ssl_context
-    except AttributeError:
-        # Fallback: utilise keyfile et certfile (mais mTLS sera moins strict)
+    else:
+        # Fallback: utilise keyfile et certfile
+        # Note: Le mTLS strict nécessite ssl_context, mais on peut quand même utiliser SSL
         hypercorn_config.keyfile = str(SERVER_KEY)
         hypercorn_config.certfile = str(SERVER_CERT)
-        print("⚠️  Attention: mTLS peut ne pas être entièrement fonctionnel avec cette version de hypercorn")
+        print("⚠️  Attention: Version de hypercorn sans support ssl_context.")
+        print("   Le serveur utilisera SSL mais le mTLS strict peut ne pas fonctionner.")
+        print("   Mettez à jour hypercorn: pip install --upgrade hypercorn")
+    
     hypercorn_config.loglevel = "WARNING"
     
     # Lance le serveur hypercorn dans une tâche asyncio
