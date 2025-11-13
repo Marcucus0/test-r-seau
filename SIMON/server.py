@@ -255,17 +255,35 @@ class P2PNode:
             # Créer la clé depuis le mot de passe
             cipher = self.transfer.creer_cle_depuis_mdp(password)
             
+            print(f"  Fichier: {filename} ({file_size / 1024 / 1024:.2f} MB)")
+            print(f"  Pré-chiffrement et calcul du hash...")
+            
+            # Pré-calculer le hash des données chiffrées
+            sha256 = hashlib.sha256()
+            chunks_chiffres = []
+            with open(filepath, 'rb') as f:
+                while True:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    chunk_encrypted = cipher.encrypt(chunk)
+                    chunks_chiffres.append(chunk_encrypted)
+                    sha256.update(chunk_encrypted)
+            
+            file_hash = sha256.hexdigest()
+            
             # Préparer les métadonnées
             metadata = {
                 'action': 'upload',
                 'filename': filename,
-                'file_size': file_size,
-                'password': password  # Le hash du mot de passe est utilisé côté réception
+                'file_size': sum(len(c) for c in chunks_chiffres),
+                'hash': file_hash,
+                'password': password
             }
             
             # Connecter et envoyer
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(10)
+            client_socket.settimeout(30)
             client_socket.connect((host, port))
             print(f"→ Connecté à {host}:{port}")
             
@@ -273,34 +291,23 @@ class P2PNode:
             client_socket.send(json.dumps(metadata).encode())
             time.sleep(0.1)
             
-            print(f"  Fichier: {filename} ({file_size / 1024 / 1024:.2f} MB)")
-            print(f"  Chiffrement avec mot de passe...")
+            print(f"  Envoi...")
             
             # Envoyer le fichier chiffré
             sent_size = 0
-            sha256 = hashlib.sha256()
-            with open(filepath, 'rb') as f:
-                while True:
-                    chunk = f.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    
-                    chunk_encrypted = cipher.encrypt(chunk)
-                    client_socket.sendall(chunk_encrypted)
-                    sha256.update(chunk_encrypted)
-                    sent_size += len(chunk_encrypted)
-                    
-                    progress = (sent_size / file_size) * 100
-                    print(f"  Envoi: {progress:.1f}%", end='\r')
-            
-            file_hash = sha256.hexdigest()
-            metadata['hash'] = file_hash
+            total_size = metadata['file_size']
+            for chunk_encrypted in chunks_chiffres:
+                client_socket.sendall(chunk_encrypted)
+                sent_size += len(chunk_encrypted)
+                
+                progress = (sent_size / total_size) * 100
+                print(f"  Envoi: {progress:.1f}%", end='\r')
             
             print(f"\n✓ Fichier envoyé chiffré!")
             
             # Attendre confirmation
             try:
-                client_socket.settimeout(5)
+                client_socket.settimeout(10)
                 response = client_socket.recv(1024)
                 if response == b'OK':
                     print("✓ Reçu et stocké par le destinataire!")
